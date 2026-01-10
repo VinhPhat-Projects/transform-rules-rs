@@ -16,6 +16,13 @@ A small Rust library and CLI to transform CSV/JSON data using YAML rules.
 - CLI output to stdout or file.
 - Error format as text or JSON.
 - When conditions with warning output on evaluation errors.
+- Rule specs: `docs/rules_spec_ja.md` (JP), `docs/rules_spec_en.md` (EN).
+
+## Rules (brief)
+
+- `mappings` are evaluated top-to-bottom; `source`/`value`/`expr` are mutually exclusive.
+- `when` is optional; `false` or evaluation errors skip the mapping.
+- Expressions support refs (`input`/`context`/`out`) and ops; see the rule specs for details.
 
 ## Installation
 
@@ -213,6 +220,13 @@ mappings:
     { "id": 2, "name": "Bob" }
   ]
 }
+```
+
+`output.json`
+```json
+[
+  { "user_name": "Alice" },
+]
 ```
 
 ### when with comparisons and regex
