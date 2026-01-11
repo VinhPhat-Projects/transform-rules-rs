@@ -244,6 +244,11 @@ fn tools_list_result() -> Value {
                 "name": "generate_rules_from_base",
                 "description": "Generate rules by mapping input data to existing rule targets.",
                 "inputSchema": generate_rules_from_base_input_schema()
+            },
+            {
+                "name": "generate_rules_from_dto",
+                "description": "Generate rules by mapping input data to a DTO schema.",
+                "inputSchema": generate_rules_from_dto_input_schema()
             }
         ]
     })
@@ -802,6 +807,91 @@ fn generate_rules_from_base_input_schema() -> Value {
     })
 }
 
+fn generate_rules_from_dto_input_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "dto_text": {
+                "type": "string",
+                "description": "DTO source text.",
+                "examples": ["export interface Record { id: string; }"]
+            },
+            "dto_language": {
+                "type": "string",
+                "enum": ["rust", "typescript"],
+                "description": "DTO language.",
+                "examples": ["typescript"]
+            },
+            "input_path": {
+                "type": "string",
+                "description": "Path to the input CSV/JSON file. Mutually exclusive with input_text and input_json.",
+                "examples": ["input.json"]
+            },
+            "input_text": {
+                "type": "string",
+                "description": "Inline input text (CSV or JSON). Mutually exclusive with input_path and input_json.",
+                "examples": ["{\"items\":[{\"id\":1}]}"]
+            },
+            "input_json": {
+                "type": ["object", "array"],
+                "description": "Inline input JSON value. Mutually exclusive with input_path and input_text.",
+                "examples": [[{"id": 1}]]
+            },
+            "format": {
+                "type": "string",
+                "enum": ["csv", "json"],
+                "description": "Override input format.",
+                "examples": ["json"]
+            },
+            "records_path": {
+                "type": "string",
+                "description": "Optional records path for JSON inputs.",
+                "examples": ["items"]
+            },
+            "max_candidates": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "Maximum number of candidates to return per target.",
+                "examples": [3]
+            }
+        },
+        "required": ["dto_text", "dto_language"],
+        "allOf": [
+            {
+                "oneOf": [
+                    {
+                        "required": ["input_path"],
+                        "not": {
+                            "anyOf": [
+                                { "required": ["input_text"] },
+                                { "required": ["input_json"] }
+                            ]
+                        }
+                    },
+                    {
+                        "required": ["input_text"],
+                        "not": {
+                            "anyOf": [
+                                { "required": ["input_path"] },
+                                { "required": ["input_json"] }
+                            ]
+                        }
+                    },
+                    {
+                        "required": ["input_json"],
+                        "not": {
+                            "anyOf": [
+                                { "required": ["input_path"] },
+                                { "required": ["input_text"] }
+                            ]
+                        }
+                    }
+                ]
+            }
+        ]
+    })
+}
+
 enum CallError {
     InvalidParams(String),
     Tool {
@@ -832,6 +922,7 @@ fn handle_tools_call(params: &Value) -> Result<Value, CallError> {
         "list_ops" => run_list_ops_tool(),
         "analyze_input" => run_analyze_input_tool(args),
         "generate_rules_from_base" => run_generate_rules_from_base_tool(args),
+        "generate_rules_from_dto" => run_generate_rules_from_dto_tool(args),
         _ => Ok(tool_error_result(&format!("unknown tool: {}", name), None)),
     }
 }
@@ -1544,6 +1635,236 @@ fn run_generate_rules_from_base_tool(args: &Map<String, Value>) -> Result<Value,
     }))
 }
 
+fn run_generate_rules_from_dto_tool(args: &Map<String, Value>) -> Result<Value, CallError> {
+    let dto_text = get_optional_string(args, "dto_text").map_err(CallError::InvalidParams)?;
+    let dto_language = get_optional_string(args, "dto_language").map_err(CallError::InvalidParams)?;
+    let input_path = get_optional_string(args, "input_path").map_err(CallError::InvalidParams)?;
+    let input_text = get_optional_string(args, "input_text").map_err(CallError::InvalidParams)?;
+    let input_json = get_optional_json_value(args, "input_json").map_err(CallError::InvalidParams)?;
+    let format = get_optional_string(args, "format").map_err(CallError::InvalidParams)?;
+    let records_path =
+        get_optional_string(args, "records_path").map_err(CallError::InvalidParams)?;
+    let max_candidates =
+        get_optional_usize(args, "max_candidates").map_err(CallError::InvalidParams)?;
+
+    let dto_text = dto_text.ok_or_else(|| {
+        CallError::InvalidParams("dto_text is required".to_string())
+    })?;
+    let dto_language = dto_language.ok_or_else(|| {
+        CallError::InvalidParams("dto_language is required".to_string())
+    })?;
+    let dto_language = parse_dto_source_language(&dto_language)
+        .map_err(CallError::InvalidParams)?;
+
+    let input_source_count =
+        input_path.is_some() as u8 + input_text.is_some() as u8 + input_json.is_some() as u8;
+    if input_source_count == 0 {
+        return Err(CallError::InvalidParams(
+            "input_path, input_text, or input_json is required".to_string(),
+        ));
+    }
+    if input_source_count > 1 {
+        return Err(CallError::InvalidParams(
+            "input_path, input_text, and input_json are mutually exclusive".to_string(),
+        ));
+    }
+
+    if input_json.is_some()
+        && format
+            .as_deref()
+            .is_some_and(|value| value.eq_ignore_ascii_case("csv"))
+    {
+        return Err(CallError::InvalidParams(
+            "format must be json when input_json is provided".to_string(),
+        ));
+    }
+    if format
+        .as_deref()
+        .is_some_and(|value| !value.eq_ignore_ascii_case("csv") && !value.eq_ignore_ascii_case("json"))
+    {
+        return Err(CallError::InvalidParams(
+            "format must be csv or json".to_string(),
+        ));
+    }
+
+    let input_text = match (input_path.as_deref(), input_text.as_deref()) {
+        (Some(path), None) => fs::read_to_string(path).map_err(|err| {
+            let message = format!("failed to read input: {}", err);
+            CallError::Tool {
+                message: message.clone(),
+                errors: Some(vec![io_error_json(&message, Some(path))]),
+            }
+        })?,
+        (None, Some(text)) => text.to_string(),
+        (None, None) => String::new(),
+        _ => {
+            return Err(CallError::InvalidParams(
+                "input_path, input_text, or input_json is required".to_string(),
+            ))
+        }
+    };
+
+    let has_input_json = input_json.is_some();
+    let parse_format = if has_input_json {
+        InputDataFormat::Json
+    } else if let Some(format) = format.as_deref() {
+        if format.eq_ignore_ascii_case("csv") {
+            InputDataFormat::Csv
+        } else {
+            InputDataFormat::Json
+        }
+    } else {
+        normalize_format(None, &input_text)
+    };
+
+    let records = match (parse_format, input_json) {
+        (InputDataFormat::Json, Some(value)) => {
+            json_records_from_value(&value, records_path.as_deref())?
+        }
+        (InputDataFormat::Json, None) => {
+            let value = serde_json::from_str(&input_text).map_err(|err| {
+                let message = format!("failed to parse input JSON: {}", err);
+                CallError::Tool {
+                    message: message.clone(),
+                    errors: Some(vec![parse_error_json(&message, input_path.as_deref())]),
+                }
+            })?;
+            json_records_from_value(&value, records_path.as_deref())?
+        }
+        (InputDataFormat::Csv, _) => parse_csv_records(&input_text).map_err(|err| {
+            let message = format!("failed to parse input CSV: {}", err);
+            CallError::Tool {
+                message: message.clone(),
+                errors: Some(vec![parse_error_json(&message, input_path.as_deref())]),
+            }
+        })?,
+    };
+
+    let schema = parse_dto_schema(&dto_text, dto_language).map_err(|message| {
+        CallError::Tool {
+            message: message.clone(),
+            errors: Some(vec![dto_error_json(&message)]),
+        }
+    })?;
+    let generated = generate_mappings_from_schema(&schema).map_err(|message| {
+        CallError::Tool {
+            message: message.clone(),
+            errors: Some(vec![dto_error_json(&message)]),
+        }
+    })?;
+
+    let stats = analyze_records(&records, None);
+    let input_paths = build_input_paths(&stats);
+    let max_candidates = max_candidates.unwrap_or(3);
+
+    let mut candidates_meta = Vec::new();
+    let mut unmapped = Vec::new();
+    let mut mapped = 0usize;
+
+    let mut mappings_yaml = Vec::new();
+    for mapping in &generated {
+        let target_leaf = leaf_from_path(&mapping.target).unwrap_or_default();
+        let candidates =
+            select_candidates(&target_leaf, None, mapping.value_type.as_deref(), &input_paths, max_candidates);
+        let selected = candidates.first().cloned();
+
+        let mut mapping_map = YamlMapping::new();
+        mapping_map.insert(yaml_key("target"), YamlValue::String(mapping.target.clone()));
+        if let Some(value_type) = mapping.value_type.as_deref() {
+            mapping_map.insert(yaml_key("type"), YamlValue::String(value_type.to_string()));
+        }
+        if let Some(selected) = selected.as_ref() {
+            mapped += 1;
+            mapping_map.insert(
+                yaml_key("source"),
+                YamlValue::String(selected.source.clone()),
+            );
+            if mapping.required {
+                mapping_map.insert(yaml_key("required"), YamlValue::Bool(true));
+            }
+        } else {
+            unmapped.push(mapping.target.clone());
+            mapping_map.insert(yaml_key("value"), YamlValue::Null);
+            mapping_map.insert(yaml_key("required"), YamlValue::Bool(false));
+        }
+        mappings_yaml.push(YamlValue::Mapping(mapping_map));
+
+        let candidates_json: Vec<Value> = candidates
+            .iter()
+            .map(|candidate| {
+                json!({
+                    "source": candidate.source,
+                    "score": candidate.score,
+                    "reason": candidate.reason,
+                    "confidence": candidate.confidence
+                })
+            })
+            .collect();
+        let mut entry = json!({
+            "target": mapping.target,
+            "candidates": candidates_json
+        });
+        if let Some(selected) = selected {
+            entry["selected"] = json!(selected.source);
+            entry["confidence"] = json!(selected.confidence);
+        }
+        candidates_meta.push(entry);
+    }
+
+    let format_str = if has_input_json {
+        "json".to_string()
+    } else if let Some(format) = format.as_deref() {
+        if format.eq_ignore_ascii_case("csv") {
+            "csv".to_string()
+        } else {
+            "json".to_string()
+        }
+    } else {
+        match parse_format {
+            InputDataFormat::Csv => "csv".to_string(),
+            InputDataFormat::Json => "json".to_string(),
+        }
+    };
+
+    let input_yaml = build_input_yaml(&format_str, records_path.as_deref());
+    let mut root = YamlMapping::new();
+    root.insert(yaml_key("version"), YamlValue::Number(1.into()));
+    root.insert(yaml_key("input"), input_yaml);
+    root.insert(yaml_key("mappings"), YamlValue::Sequence(mappings_yaml));
+    let yaml_value = YamlValue::Mapping(root);
+    let output_text = serde_yaml::to_string(&yaml_value).map_err(|err| {
+        let message = format!("failed to serialize rules yaml: {}", err);
+        CallError::Tool {
+            message: message.clone(),
+            errors: Some(vec![parse_error_json(&message, None)]),
+        }
+    })?;
+
+    let mut meta = serde_json::Map::new();
+    meta.insert(
+        "summary".to_string(),
+        json!({
+            "total": generated.len(),
+            "mapped": mapped,
+            "unmapped": unmapped.len()
+        }),
+    );
+    meta.insert("candidates".to_string(), Value::Array(candidates_meta));
+    if !unmapped.is_empty() {
+        meta.insert("unmapped".to_string(), json!(unmapped));
+    }
+
+    Ok(json!({
+        "content": [
+            {
+                "type": "text",
+                "text": output_text
+            }
+        ],
+        "meta": meta
+    }))
+}
+
 fn tool_error_result(message: &str, errors: Option<Vec<Value>>) -> Value {
     let mut result = json!({
         "content": [
@@ -1678,6 +1999,20 @@ fn dto_language_to_str(language: DtoLanguage) -> &'static str {
         DtoLanguage::Java => "java",
         DtoLanguage::Kotlin => "kotlin",
         DtoLanguage::Swift => "swift",
+    }
+}
+
+#[derive(Clone, Copy)]
+enum DtoSourceLanguage {
+    Rust,
+    TypeScript,
+}
+
+fn parse_dto_source_language(value: &str) -> Result<DtoSourceLanguage, String> {
+    match value.to_lowercase().as_str() {
+        "rust" => Ok(DtoSourceLanguage::Rust),
+        "typescript" => Ok(DtoSourceLanguage::TypeScript),
+        _ => Err("dto_language must be rust or typescript".to_string()),
     }
 }
 
@@ -2062,6 +2397,354 @@ fn confidence_for_score(score: f64) -> &'static str {
     } else {
         "low"
     }
+}
+
+struct DtoSchema {
+    root: String,
+    types: HashMap<String, DtoType>,
+}
+
+struct DtoType {
+    fields: Vec<DtoField>,
+}
+
+struct DtoField {
+    json_key: String,
+    field_type: DtoFieldType,
+    optional: bool,
+}
+
+enum DtoFieldType {
+    Primitive(PrimitiveKind),
+    Object(String),
+    Unknown,
+}
+
+enum PrimitiveKind {
+    String,
+    Int,
+    Float,
+    Bool,
+}
+
+struct GeneratedMapping {
+    target: String,
+    value_type: Option<String>,
+    required: bool,
+}
+
+fn parse_dto_schema(text: &str, language: DtoSourceLanguage) -> Result<DtoSchema, String> {
+    let (types, order) = match language {
+        DtoSourceLanguage::TypeScript => parse_typescript_types(text)?,
+        DtoSourceLanguage::Rust => parse_rust_types(text)?,
+    };
+
+    let root = if types.contains_key("Record") {
+        "Record".to_string()
+    } else {
+        order
+            .first()
+            .cloned()
+            .ok_or_else(|| "no dto types found".to_string())?
+    };
+
+    Ok(DtoSchema { root, types })
+}
+
+fn parse_typescript_types(text: &str) -> Result<(HashMap<String, DtoType>, Vec<String>), String> {
+    let mut types: HashMap<String, DtoType> = HashMap::new();
+    let mut order = Vec::new();
+    let mut current: Option<String> = None;
+    let mut pending_json_key: Option<String> = None;
+
+    for raw_line in text.lines() {
+        let mut line = raw_line.trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        if line.starts_with("export interface ") || line.starts_with("interface ") {
+            let line = line.strip_prefix("export ").unwrap_or(line);
+            let name_part = line
+                .strip_prefix("interface ")
+                .unwrap_or(line)
+                .trim();
+            let name = name_part
+                .split(|ch: char| ch.is_whitespace() || ch == '{')
+                .next()
+                .unwrap_or("")
+                .trim();
+            if name.is_empty() {
+                continue;
+            }
+            current = Some(name.to_string());
+            pending_json_key = None;
+            types
+                .entry(name.to_string())
+                .or_insert_with(|| DtoType { fields: Vec::new() });
+            order.push(name.to_string());
+            continue;
+        }
+
+        let Some(current_name) = current.clone() else { continue };
+        if line.starts_with('}') {
+            current = None;
+            pending_json_key = None;
+            continue;
+        }
+
+        if let Some((json_key, rest)) = parse_json_comment(line) {
+            pending_json_key = Some(json_key);
+            line = rest.trim();
+            if line.is_empty() {
+                continue;
+            }
+        }
+
+        if !line.contains(':') {
+            continue;
+        }
+
+        let line = line.trim_end_matches(';').trim();
+        let mut parts = line.splitn(2, ':');
+        let name_part = parts.next().unwrap_or("").trim();
+        let type_part = parts.next().unwrap_or("").trim();
+        if name_part.is_empty() || type_part.is_empty() {
+            continue;
+        }
+        let optional = name_part.ends_with('?');
+        let field_name = name_part.trim_end_matches('?').trim().to_string();
+
+        let type_token = type_part
+            .split(|ch| ch == '|' || ch == '&')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .trim_end_matches(';');
+        let field_type = if type_token.contains('[') {
+            DtoFieldType::Unknown
+        } else {
+            match type_token {
+                "string" => DtoFieldType::Primitive(PrimitiveKind::String),
+                "number" => DtoFieldType::Primitive(PrimitiveKind::Float),
+                "boolean" => DtoFieldType::Primitive(PrimitiveKind::Bool),
+                "unknown" | "any" => DtoFieldType::Unknown,
+                "" => DtoFieldType::Unknown,
+                other => DtoFieldType::Object(other.to_string()),
+            }
+        };
+
+        let json_key = pending_json_key.take().unwrap_or_else(|| field_name.clone());
+        if let Some(dto_type) = types.get_mut(&current_name) {
+            dto_type.fields.push(DtoField {
+                json_key,
+                field_type,
+                optional,
+            });
+        }
+    }
+
+    Ok((types, order))
+}
+
+fn parse_rust_types(text: &str) -> Result<(HashMap<String, DtoType>, Vec<String>), String> {
+    let mut types: HashMap<String, DtoType> = HashMap::new();
+    let mut order = Vec::new();
+    let mut current: Option<String> = None;
+    let mut pending_json_key: Option<String> = None;
+
+    for raw_line in text.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        if line.starts_with("pub struct ") {
+            let name_part = line.strip_prefix("pub struct ").unwrap_or(line).trim();
+            let name = name_part
+                .split(|ch: char| ch.is_whitespace() || ch == '{')
+                .next()
+                .unwrap_or("")
+                .trim();
+            if name.is_empty() {
+                continue;
+            }
+            current = Some(name.to_string());
+            pending_json_key = None;
+            types
+                .entry(name.to_string())
+                .or_insert_with(|| DtoType { fields: Vec::new() });
+            order.push(name.to_string());
+            continue;
+        }
+
+        let Some(current_name) = current.clone() else { continue };
+        if line.starts_with('}') {
+            current = None;
+            pending_json_key = None;
+            continue;
+        }
+
+        if line.starts_with("#[serde") {
+            if let Some(rename) = parse_serde_rename(line) {
+                pending_json_key = Some(rename);
+            }
+            continue;
+        }
+
+        if !line.starts_with("pub ") {
+            continue;
+        }
+
+        let line = line.trim_end_matches(',');
+        let rest = line.strip_prefix("pub ").unwrap_or(line).trim();
+        let mut parts = rest.splitn(2, ':');
+        let field_name = parts.next().unwrap_or("").trim();
+        let type_part = parts.next().unwrap_or("").trim();
+        if field_name.is_empty() || type_part.is_empty() {
+            continue;
+        }
+
+        let compact = type_part.replace(' ', "");
+        let (type_name, optional) = if compact.starts_with("Option<") && compact.ends_with('>') {
+            (
+                compact[7..compact.len() - 1].to_string(),
+                true,
+            )
+        } else {
+            (compact, false)
+        };
+
+        let type_key = type_name
+            .rsplit("::")
+            .next()
+            .unwrap_or(&type_name)
+            .to_string();
+        let field_type = match type_key.as_str() {
+            "String" => DtoFieldType::Primitive(PrimitiveKind::String),
+            "bool" => DtoFieldType::Primitive(PrimitiveKind::Bool),
+            "i8" | "i16" | "i32" | "i64" | "isize" | "u8" | "u16" | "u32" | "u64" | "usize" => {
+                DtoFieldType::Primitive(PrimitiveKind::Int)
+            }
+            "f32" | "f64" => DtoFieldType::Primitive(PrimitiveKind::Float),
+            _ if type_key.ends_with("Value") => DtoFieldType::Unknown,
+            _ => DtoFieldType::Object(type_key),
+        };
+
+        let json_key = pending_json_key.take().unwrap_or_else(|| field_name.to_string());
+        if let Some(dto_type) = types.get_mut(&current_name) {
+            dto_type.fields.push(DtoField {
+                json_key,
+                field_type,
+                optional,
+            });
+        }
+    }
+
+    Ok((types, order))
+}
+
+fn parse_json_comment(line: &str) -> Option<(String, &str)> {
+    let marker = line.find("json:")?;
+    let after_marker = &line[marker + 5..];
+    let quote_start = after_marker.find('"')?;
+    let after_quote = &after_marker[quote_start + 1..];
+    let quote_end = after_quote.find('"')?;
+    let json_key = after_quote[..quote_end].to_string();
+    let rest = if let Some(end) = line.find("*/") {
+        &line[end + 2..]
+    } else {
+        ""
+    };
+    Some((json_key, rest))
+}
+
+fn parse_serde_rename(line: &str) -> Option<String> {
+    let marker = line.find("rename")?;
+    let after_marker = &line[marker..];
+    let quote_start = after_marker.find('"')?;
+    let after_quote = &after_marker[quote_start + 1..];
+    let quote_end = after_quote.find('"')?;
+    Some(after_quote[..quote_end].to_string())
+}
+
+fn generate_mappings_from_schema(schema: &DtoSchema) -> Result<Vec<GeneratedMapping>, String> {
+    let mut mappings = Vec::new();
+    let mut visiting = HashSet::new();
+    build_mappings_for_type(schema, &schema.root, "", false, &mut visiting, &mut mappings)?;
+    Ok(mappings)
+}
+
+fn build_mappings_for_type(
+    schema: &DtoSchema,
+    type_name: &str,
+    prefix: &str,
+    parent_optional: bool,
+    visiting: &mut HashSet<String>,
+    out: &mut Vec<GeneratedMapping>,
+) -> Result<(), String> {
+    if !visiting.insert(type_name.to_string()) {
+        return Ok(());
+    }
+    let dto_type = schema
+        .types
+        .get(type_name)
+        .ok_or_else(|| format!("unknown dto type: {}", type_name))?;
+
+    for field in &dto_type.fields {
+        let target = append_path(prefix, &field.json_key);
+        let optional = parent_optional || field.optional;
+        match &field.field_type {
+            DtoFieldType::Primitive(kind) => {
+                let value_type = primitive_to_value_type(kind);
+                out.push(GeneratedMapping {
+                    target,
+                    value_type,
+                    required: !optional,
+                });
+            }
+            DtoFieldType::Unknown => {
+                out.push(GeneratedMapping {
+                    target,
+                    value_type: None,
+                    required: !optional,
+                });
+            }
+            DtoFieldType::Object(child) => {
+                build_mappings_for_type(schema, child, &target, optional, visiting, out)?;
+            }
+        }
+    }
+
+    visiting.remove(type_name);
+    Ok(())
+}
+
+fn primitive_to_value_type(kind: &PrimitiveKind) -> Option<String> {
+    match kind {
+        PrimitiveKind::String => Some("string".to_string()),
+        PrimitiveKind::Int => Some("int".to_string()),
+        PrimitiveKind::Float => Some("float".to_string()),
+        PrimitiveKind::Bool => Some("bool".to_string()),
+    }
+}
+
+fn build_input_yaml(format: &str, records_path: Option<&str>) -> YamlValue {
+    let mut input_map = YamlMapping::new();
+    input_map.insert(yaml_key("format"), YamlValue::String(format.to_string()));
+    if format.eq_ignore_ascii_case("json") {
+        let mut json_map = YamlMapping::new();
+        if let Some(records_path) = records_path {
+            json_map.insert(
+                yaml_key("records_path"),
+                YamlValue::String(records_path.to_string()),
+            );
+        }
+        input_map.insert(yaml_key("json"), YamlValue::Mapping(json_map));
+    } else {
+        input_map.insert(yaml_key("csv"), YamlValue::Mapping(YamlMapping::new()));
+    }
+    YamlValue::Mapping(input_map)
 }
 
 fn value_type_name(value: &Value) -> &'static str {

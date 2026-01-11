@@ -92,6 +92,7 @@ fn initialize_and_list_tools() {
         "list_ops",
         "analyze_input",
         "generate_rules_from_base",
+        "generate_rules_from_dto",
     ];
     for name in expected {
         assert!(tools.iter().any(|tool| tool["name"] == name));
@@ -531,13 +532,51 @@ mappings:
 }
 
 #[test]
+fn generate_rules_from_dto_success() {
+    let mut server = McpServer::start();
+    initialize(&mut server);
+
+    let dto_text = r#"export interface Record {
+  id: string;
+  name?: string;
+}"#;
+
+    let request = json!({
+        "jsonrpc": "2.0",
+        "id": 15,
+        "method": "tools/call",
+        "params": {
+            "name": "generate_rules_from_dto",
+            "arguments": {
+                "dto_text": dto_text,
+                "dto_language": "typescript",
+                "input_json": {
+                    "id": 1,
+                    "name": "Ada"
+                }
+            }
+        }
+    });
+
+    let response = server.send(&request);
+    let output_text = response["result"]["content"][0]["text"]
+        .as_str()
+        .expect("output text");
+    let rule = parse_rule_file(output_text).expect("parse output rules");
+    assert_eq!(rule.mappings[0].source.as_deref(), Some("id"));
+    assert_eq!(rule.mappings[1].source.as_deref(), Some("name"));
+
+    server.shutdown();
+}
+
+#[test]
 fn resources_list_and_read() {
     let mut server = McpServer::start();
     initialize(&mut server);
 
     let list_request = json!({
         "jsonrpc": "2.0",
-        "id": 15,
+        "id": 16,
         "method": "resources/list"
     });
     let list_response = server.send(&list_request);
@@ -548,7 +587,7 @@ fn resources_list_and_read() {
 
     let read_request = json!({
         "jsonrpc": "2.0",
-        "id": 16,
+        "id": 17,
         "method": "resources/read",
         "params": {
             "uri": "transform-rules://docs/rules_spec_en"
@@ -570,7 +609,7 @@ fn prompts_list_and_get() {
 
     let list_request = json!({
         "jsonrpc": "2.0",
-        "id": 17,
+        "id": 18,
         "method": "prompts/list"
     });
     let list_response = server.send(&list_request);
@@ -581,7 +620,7 @@ fn prompts_list_and_get() {
 
     let get_request = json!({
         "jsonrpc": "2.0",
-        "id": 18,
+        "id": 19,
         "method": "prompts/get",
         "params": {
             "name": "explain_errors",
