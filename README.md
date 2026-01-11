@@ -82,48 +82,15 @@ Build from source:
 cargo build -p transform_rules_mcp --release
 ```
 
-Claude Desktop (macOS) config example:
-`~/Library/Application Support/Claude/claude_desktop_config.json`
-```json
-{
-  "mcpServers": {
-    "transform-rules": {
-      "command": "/absolute/path/to/transform-rules-mcp",
-      "args": []
-    }
-  }
-}
-```
+mcp add example:
+```bash
+# from download releases
+claude mcp add --transport stdio --scope local transform-rules -- `pwd`/transform-rules-mcp
+codex mcp add transform-rules -- `pwd`/transform-rules-mcp
 
-Tip: If you are in the directory where `transform-rules-mcp` exists, you can create a JSON snippet with an absolute path using `$(pwd)`:
-```
-MCP_BIN="$(pwd)/transform-rules-mcp"
-cat <<EOF > /tmp/transform-rules-mcp.json
-{
-  "mcpServers": {
-    "transform-rules": {
-      "command": "${MCP_BIN}",
-      "args": []
-    }
-  }
-}
-EOF
-```
-Merge the `mcpServers.transform-rules` entry into your Claude config if you already have one.
-
-Windows (PowerShell) snippet using `$PWD`:
-```
-$McpBin = Join-Path $PWD "transform-rules-mcp.exe"
-@"
-{
-  "mcpServers": {
-    "transform-rules": {
-      "command": "$McpBin",
-      "args": []
-    }
-  }
-}
-"@ | Set-Content -Path "$env:TEMP\\transform-rules-mcp.json"
+# from build source
+claude mcp add --transport stdio --scope local transform-rules -- `pwd`/target/release/transform-rules-mcp
+codex mcp add transform-rules -- `pwd`/target/release/transform-rules-mcp
 ```
 
 Tool: `transform`

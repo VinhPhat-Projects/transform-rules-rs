@@ -504,55 +504,7 @@ fn transform_input_schema() -> Value {
                 "description": "Include parsed output JSON in meta.output when ndjson=false and within size limits.",
                 "examples": [false]
             }
-        },
-        "allOf": [
-            {
-                "oneOf": [
-                    {
-                        "required": ["rules_path"],
-                        "not": { "required": ["rules_text"] }
-                    },
-                    {
-                        "required": ["rules_text"],
-                        "not": { "required": ["rules_path"] }
-                    }
-                ]
-            },
-            {
-                "oneOf": [
-                    {
-                        "required": ["input_path"],
-                        "not": {
-                            "anyOf": [
-                                { "required": ["input_text"] },
-                                { "required": ["input_json"] }
-                            ]
-                        }
-                    },
-                    {
-                        "required": ["input_text"],
-                        "not": {
-                            "anyOf": [
-                                { "required": ["input_path"] },
-                                { "required": ["input_json"] }
-                            ]
-                        }
-                    },
-                    {
-                        "required": ["input_json"],
-                        "not": {
-                            "anyOf": [
-                                { "required": ["input_path"] },
-                                { "required": ["input_text"] }
-                            ]
-                        }
-                    }
-                ]
-            },
-            {
-                "not": { "required": ["context_path", "context_json"] }
-            }
-        ]
+        }
     })
 }
 
@@ -570,21 +522,7 @@ fn validate_rules_input_schema() -> Value {
                 "description": "Inline YAML rules content. Mutually exclusive with rules_path.",
                 "examples": ["version: 1\ninput:\n  format: json\n  json: {}\nmappings:\n  - target: \"id\"\n    source: \"id\""]
             }
-        },
-        "allOf": [
-            {
-                "oneOf": [
-                    {
-                        "required": ["rules_path"],
-                        "not": { "required": ["rules_text"] }
-                    },
-                    {
-                        "required": ["rules_text"],
-                        "not": { "required": ["rules_path"] }
-                    }
-                ]
-            }
-        ]
+        }
     })
 }
 
@@ -614,21 +552,7 @@ fn generate_dto_input_schema() -> Value {
                 "examples": ["Record"]
             }
         },
-        "required": ["language"],
-        "allOf": [
-            {
-                "oneOf": [
-                    {
-                        "required": ["rules_path"],
-                        "not": { "required": ["rules_text"] }
-                    },
-                    {
-                        "required": ["rules_text"],
-                        "not": { "required": ["rules_path"] }
-                    }
-                ]
-            }
-        ]
+        "required": ["language"]
     })
 }
 
@@ -675,40 +599,7 @@ fn analyze_input_input_schema() -> Value {
                 "description": "Maximum number of unique paths to include in the response.",
                 "examples": [200]
             }
-        },
-        "allOf": [
-            {
-                "oneOf": [
-                    {
-                        "required": ["input_path"],
-                        "not": {
-                            "anyOf": [
-                                { "required": ["input_text"] },
-                                { "required": ["input_json"] }
-                            ]
-                        }
-                    },
-                    {
-                        "required": ["input_text"],
-                        "not": {
-                            "anyOf": [
-                                { "required": ["input_path"] },
-                                { "required": ["input_json"] }
-                            ]
-                        }
-                    },
-                    {
-                        "required": ["input_json"],
-                        "not": {
-                            "anyOf": [
-                                { "required": ["input_path"] },
-                                { "required": ["input_text"] }
-                            ]
-                        }
-                    }
-                ]
-            }
-        ]
+        }
     })
 }
 
@@ -758,52 +649,7 @@ fn generate_rules_from_base_input_schema() -> Value {
                 "description": "Maximum number of candidates to return per target.",
                 "examples": [3]
             }
-        },
-        "allOf": [
-            {
-                "oneOf": [
-                    {
-                        "required": ["rules_path"],
-                        "not": { "required": ["rules_text"] }
-                    },
-                    {
-                        "required": ["rules_text"],
-                        "not": { "required": ["rules_path"] }
-                    }
-                ]
-            },
-            {
-                "oneOf": [
-                    {
-                        "required": ["input_path"],
-                        "not": {
-                            "anyOf": [
-                                { "required": ["input_text"] },
-                                { "required": ["input_json"] }
-                            ]
-                        }
-                    },
-                    {
-                        "required": ["input_text"],
-                        "not": {
-                            "anyOf": [
-                                { "required": ["input_path"] },
-                                { "required": ["input_json"] }
-                            ]
-                        }
-                    },
-                    {
-                        "required": ["input_json"],
-                        "not": {
-                            "anyOf": [
-                                { "required": ["input_path"] },
-                                { "required": ["input_text"] }
-                            ]
-                        }
-                    }
-                ]
-            }
-        ]
+        }
     })
 }
 
@@ -855,40 +701,7 @@ fn generate_rules_from_dto_input_schema() -> Value {
                 "examples": [3]
             }
         },
-        "required": ["dto_text", "dto_language"],
-        "allOf": [
-            {
-                "oneOf": [
-                    {
-                        "required": ["input_path"],
-                        "not": {
-                            "anyOf": [
-                                { "required": ["input_text"] },
-                                { "required": ["input_json"] }
-                            ]
-                        }
-                    },
-                    {
-                        "required": ["input_text"],
-                        "not": {
-                            "anyOf": [
-                                { "required": ["input_path"] },
-                                { "required": ["input_json"] }
-                            ]
-                        }
-                    },
-                    {
-                        "required": ["input_json"],
-                        "not": {
-                            "anyOf": [
-                                { "required": ["input_path"] },
-                                { "required": ["input_text"] }
-                            ]
-                        }
-                    }
-                ]
-            }
-        ]
+        "required": ["dto_text", "dto_language"]
     })
 }
 
