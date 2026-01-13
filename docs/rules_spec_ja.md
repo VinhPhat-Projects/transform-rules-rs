@@ -175,6 +175,7 @@ expr:
 | `-` | `2 expr` | 数値の減算。 | `args: [ 10, 4 ]`<br>`-> 6` |
 | `*` | `>=2 expr` | 数値の乗算。 | `args: [ 2, 3 ]`<br>`-> 6` |
 | `/` | `2 expr` | 数値の除算。 | `args: [ 9, 2 ]`<br>`-> 4.5` |
+| `round` | `1-2 expr` | 数値を丸め（四捨五入）。`scale` は小数桁数。 | `args: [ 12.345, 2 ]`<br>`-> 12.35` |
 | `to_base` | `2 expr` | 整数を指定進数の文字列に変換（2-36）。 | `args: [ 255, 16 ]`<br>`-> "ff"` |
 | `date_format` | `2-4 expr` | 日時文字列をフォーマット変換。`input_format` は文字列 or 配列、`timezone` は `UTC`/`+09:00` 形式。 | `args: [ { ref: "input.date" }, "%Y/%m/%d" ]`<br>`{"date":"2024-01-02"} -> "2024/01/02"` |
 | `to_unixtime` | `1-3 expr` | 日時文字列を unix time へ。`unit` は `s`/`ms`。 | `args: [ "1970-01-01T00:00:01Z" ]`<br>`-> 1` |
@@ -214,6 +215,9 @@ expr:
   - 数値または数値文字列のみ。`missing` は `missing`。`null` はエラー。
   - `/` の結果が非有限値になる場合はエラー。
   - `to_base` は整数のみ、`base` は 2-36。
+- `round`:
+  - `scale` は非負整数（省略時は 0）。
+  - 丸めは 0.5 を絶対値方向に丸める。
 - `date_format/to_unixtime`:
   - 入力は文字列のみ。`missing` は `missing`。`null` はエラー。
   - `date_format` の `input_format` は文字列または配列（chrono の `strftime` 形式）。

@@ -3,7 +3,7 @@
   "regex_text": "a1b2c3",
   "csv": "a,b,c",
   "pad": "7",
-  "num_a": 1,
+  "num_a": 80.6,
   "num_b": "2.5",
   "num_c": 3,
   "base_value": 255,

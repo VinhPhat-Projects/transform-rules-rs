@@ -51,8 +51,13 @@ mappings:
       args: [10, 4]
   - target: "mul"
     expr:
-      op: "*"
-      args: [2, "3"]
+      op: "round"
+      args:
+        - op: "*"
+          args:
+            - { op: "-", args: [ { ref: "input.num_a" }, 32 ] }
+            - { op: "/", args: [ 5, 9 ] }
+        - 2
   - target: "div"
     expr:
       op: "/"

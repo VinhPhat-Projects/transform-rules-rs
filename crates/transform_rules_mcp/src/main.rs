@@ -1082,6 +1082,7 @@ fn run_list_ops_tool() -> Result<Value, CallError> {
             "-",
             "*",
             "/",
+            "round",
             "to_base",
             "date_format",
             "to_unixtime"

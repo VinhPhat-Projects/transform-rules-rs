@@ -277,6 +277,7 @@ fn bool_expr_kind(expr: &Expr) -> BoolExprKind {
             | "-"
             | "*"
             | "/"
+            | "round"
             | "to_base"
             | "date_format"
             | "to_unixtime" => BoolExprKind::NotBool,
@@ -437,6 +438,15 @@ fn validate_op(
                 );
             }
         }
+        "round" => {
+            if !(1..=2).contains(&expr_op.args.len()) {
+                ctx.push(
+                    ErrorCode::InvalidArgs,
+                    "expr.args must contain one or two items",
+                    format!("{}.args", base_path),
+                );
+            }
+        }
         "date_format" => {
             if !(2..=4).contains(&expr_op.args.len()) {
                 ctx.push(
@@ -552,6 +562,7 @@ fn is_valid_op(value: &str) -> bool {
             | "-"
             | "*"
             | "/"
+            | "round"
             | "to_base"
             | "date_format"
             | "to_unixtime"

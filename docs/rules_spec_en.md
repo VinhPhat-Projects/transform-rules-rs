@@ -175,6 +175,7 @@ Forms:
 | `-` | `2 expr` | Numeric subtraction. | `args: [ 10, 4 ]`<br>`-> 6` |
 | `*` | `>=2 expr` | Numeric multiplication. | `args: [ 2, 3 ]`<br>`-> 6` |
 | `/` | `2 expr` | Numeric division. | `args: [ 9, 2 ]`<br>`-> 4.5` |
+| `round` | `1-2 expr` | Round a number. `scale` controls decimal places. | `args: [ 12.345, 2 ]`<br>`-> 12.35` |
 | `to_base` | `2 expr` | Convert an integer to a base-N string (2-36). | `args: [ 255, 16 ]`<br>`-> "ff"` |
 | `date_format` | `2-4 expr` | Reformat date strings. `input_format` may be string or array; `timezone` accepts `UTC`/`+09:00`. | `args: [ { ref: "input.date" }, "%Y/%m/%d" ]`<br>`{"date":"2024-01-02"} -> "2024/01/02"` |
 | `to_unixtime` | `1-3 expr` | Convert date strings to unix time. `unit`: `s`/`ms`. | `args: [ "1970-01-01T00:00:01Z" ]`<br>`-> 1` |
@@ -214,6 +215,9 @@ Forms:
   - numbers or numeric strings only. `missing` -> `missing`. `null` is an error.
   - `/` errors on non-finite results.
   - `to_base` requires an integer; `base` is 2-36.
+- `round`:
+  - `scale` is a non-negative integer (default 0).
+  - rounding uses half away from zero.
 - `date_format/to_unixtime`:
   - input must be a string. `missing` -> `missing`. `null` is an error.
   - `date_format` accepts `input_format` as string or array (chrono strftime).
