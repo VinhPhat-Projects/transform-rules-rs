@@ -3,7 +3,10 @@
   "name": "io.github.vinhphatfsg/transform-rules-mcp",
   "title": "Transform Rules MCP Server",
   "description": "MCP server for CSV/JSON data transformation using YAML rules",
-  "repository": "https://github.com/vinhphatfsg/transform-rules-rs",
+  "repository": {
+    "url": "https://github.com/vinhphatfsg/transform-rules-rs",
+    "source": "github"
+  },
   "version": "0.1.3",
   "packages": [
     {
