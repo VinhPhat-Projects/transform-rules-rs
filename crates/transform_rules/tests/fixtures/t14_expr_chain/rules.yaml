@@ -25,3 +25,8 @@ mappings:
       chain:
         - { ref: "input.tags" }
         - { op: "split", args: [ "," ] }
+  - target: "flag_default"
+    expr:
+      chain:
+        - { ref: "input.flag" }
+        - { op: "or", args: [ true ] }

@@ -2,6 +2,7 @@
   {
     "name_slug": "ada_lovelace",
     "temp_c": "027",
-    "tag_list": ["a", "b", "c"]
+    "tag_list": ["a", "b", "c"],
+    "flag_default": true
   }
 ]
