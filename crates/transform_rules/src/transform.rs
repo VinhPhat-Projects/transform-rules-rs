@@ -792,6 +792,22 @@ fn eval_op(
         "lookup_first" => {
             eval_lookup(&expr_op.args, injected, record, context, out, base_path, true, locals)
         }
+        "merge" => eval_json_merge(&expr_op.args, injected, record, context, out, base_path, false, locals),
+        "deep_merge" => {
+            eval_json_merge(&expr_op.args, injected, record, context, out, base_path, true, locals)
+        }
+        "get" => eval_json_get(&expr_op.args, injected, record, context, out, base_path, locals),
+        "pick" => eval_json_pick(&expr_op.args, injected, record, context, out, base_path, locals),
+        "omit" => eval_json_omit(&expr_op.args, injected, record, context, out, base_path, locals),
+        "keys" => eval_json_keys(&expr_op.args, injected, record, context, out, base_path, locals),
+        "values" => eval_json_values(&expr_op.args, injected, record, context, out, base_path, locals),
+        "entries" => eval_json_entries(&expr_op.args, injected, record, context, out, base_path, locals),
+        "object_flatten" => {
+            eval_json_object_flatten(&expr_op.args, injected, record, context, out, base_path, locals)
+        }
+        "object_unflatten" => {
+            eval_json_object_unflatten(&expr_op.args, injected, record, context, out, base_path, locals)
+        }
         "map" => eval_array_map(&expr_op.args, injected, record, context, out, base_path, locals),
         "filter" => eval_array_filter(&expr_op.args, injected, record, context, out, base_path, locals),
         "flat_map" => eval_array_flat_map(&expr_op.args, injected, record, context, out, base_path, locals),
@@ -3183,6 +3199,777 @@ fn eval_array_fold(
     }
 
     Ok(EvalValue::Value(acc))
+}
+
+fn eval_json_merge(
+    args: &[Expr],
+    injected: Option<&EvalValue>,
+    record: &JsonValue,
+    context: Option<&JsonValue>,
+    out: &JsonValue,
+    base_path: &str,
+    deep: bool,
+    locals: Option<&EvalLocals<'_>>,
+) -> Result<EvalValue, TransformError> {
+    let total_len = args_len(args, injected);
+    if total_len < 2 {
+        return Err(TransformError::new(
+            TransformErrorKind::ExprError,
+            "expr.args must contain at least two items",
+        )
+        .with_path(format!("{}.args", base_path)));
+    }
+
+    let mut result: Option<Map<String, JsonValue>> = None;
+    for index in 0..total_len {
+        let arg_path = format!("{}.args[{}]", base_path, index);
+        let value = eval_expr_at_index(index, args, injected, record, context, out, base_path, locals)?;
+        let value = match value {
+            EvalValue::Missing => continue,
+            EvalValue::Value(value) => value,
+        };
+        if value.is_null() {
+            return Err(TransformError::new(
+                TransformErrorKind::ExprError,
+                "expr arg must not be null",
+            )
+            .with_path(arg_path));
+        }
+        let obj = match value {
+            JsonValue::Object(map) => map,
+            _ => {
+                return Err(TransformError::new(
+                    TransformErrorKind::ExprError,
+                    "expr arg must be object",
+                )
+                .with_path(arg_path))
+            }
+        };
+
+        match result {
+            Some(ref mut existing) => merge_object(existing, &obj, deep),
+            None => result = Some(obj),
+        }
+    }
+
+    match result {
+        Some(map) => Ok(EvalValue::Value(JsonValue::Object(map))),
+        None => Ok(EvalValue::Missing),
+    }
+}
+
+fn eval_json_get(
+    args: &[Expr],
+    injected: Option<&EvalValue>,
+    record: &JsonValue,
+    context: Option<&JsonValue>,
+    out: &JsonValue,
+    base_path: &str,
+    locals: Option<&EvalLocals<'_>>,
+) -> Result<EvalValue, TransformError> {
+    let total_len = args_len(args, injected);
+    if total_len != 2 {
+        return Err(TransformError::new(
+            TransformErrorKind::ExprError,
+            "expr.args must contain exactly two items",
+        )
+        .with_path(format!("{}.args", base_path)));
+    }
+
+    let base_value =
+        eval_expr_at_index(0, args, injected, record, context, out, base_path, locals)?;
+    let base_value = match base_value {
+        EvalValue::Missing => return Ok(EvalValue::Missing),
+        EvalValue::Value(value) => value,
+    };
+    if base_value.is_null() {
+        return Ok(EvalValue::Missing);
+    }
+
+    let path_path = format!("{}.args[1]", base_path);
+    let path_value =
+        eval_expr_at_index(1, args, injected, record, context, out, base_path, locals)?;
+    let path_value = match path_value {
+        EvalValue::Missing => return Ok(EvalValue::Missing),
+        EvalValue::Value(value) => value,
+    };
+    if path_value.is_null() {
+        return Err(TransformError::new(
+            TransformErrorKind::ExprError,
+            "expr arg must not be null",
+        )
+        .with_path(path_path));
+    }
+    let path = value_as_string(&path_value, &path_path)?;
+    if path.is_empty() {
+        return Err(TransformError::new(
+            TransformErrorKind::ExprError,
+            "path must be a non-empty string",
+        )
+        .with_path(path_path));
+    }
+    let tokens = parse_path_tokens(&path, TransformErrorKind::ExprError, &path_path)?;
+    match get_path(&base_value, &tokens) {
+        Some(value) => Ok(EvalValue::Value(value.clone())),
+        None => Ok(EvalValue::Missing),
+    }
+}
+
+fn eval_json_pick(
+    args: &[Expr],
+    injected: Option<&EvalValue>,
+    record: &JsonValue,
+    context: Option<&JsonValue>,
+    out: &JsonValue,
+    base_path: &str,
+    locals: Option<&EvalLocals<'_>>,
+) -> Result<EvalValue, TransformError> {
+    let total_len = args_len(args, injected);
+    if total_len != 2 {
+        return Err(TransformError::new(
+            TransformErrorKind::ExprError,
+            "expr.args must contain exactly two items",
+        )
+        .with_path(format!("{}.args", base_path)));
+    }
+
+    let base_path_arg = format!("{}.args[0]", base_path);
+    let base_value =
+        eval_expr_at_index(0, args, injected, record, context, out, base_path, locals)?;
+    let base_value = match base_value {
+        EvalValue::Missing => return Ok(EvalValue::Missing),
+        EvalValue::Value(value) => value,
+    };
+    if base_value.is_null() {
+        return Err(TransformError::new(
+            TransformErrorKind::ExprError,
+            "expr arg must not be null",
+        )
+        .with_path(base_path_arg));
+    }
+    let base_obj = match base_value {
+        JsonValue::Object(map) => map,
+        _ => {
+            return Err(TransformError::new(
+                TransformErrorKind::ExprError,
+                "expr arg must be object",
+            )
+            .with_path(base_path_arg))
+        }
+    };
+    let base_value = JsonValue::Object(base_obj);
+
+    let paths = eval_json_paths_arg(args, injected, record, context, out, base_path, locals, 1, true)?;
+    let Some(paths) = paths else {
+        return Ok(EvalValue::Missing);
+    };
+
+    let mut output = JsonValue::Object(Map::new());
+    for tokens in paths {
+        if let Some(value) = get_path(&base_value, &tokens) {
+            set_path_with_indexes(&mut output, &tokens, value.clone(), base_path)?;
+        }
+    }
+
+    Ok(EvalValue::Value(output))
+}
+
+fn eval_json_omit(
+    args: &[Expr],
+    injected: Option<&EvalValue>,
+    record: &JsonValue,
+    context: Option<&JsonValue>,
+    out: &JsonValue,
+    base_path: &str,
+    locals: Option<&EvalLocals<'_>>,
+) -> Result<EvalValue, TransformError> {
+    let total_len = args_len(args, injected);
+    if total_len != 2 {
+        return Err(TransformError::new(
+            TransformErrorKind::ExprError,
+            "expr.args must contain exactly two items",
+        )
+        .with_path(format!("{}.args", base_path)));
+    }
+
+    let base_path_arg = format!("{}.args[0]", base_path);
+    let base_value =
+        eval_expr_at_index(0, args, injected, record, context, out, base_path, locals)?;
+    let mut base_value = match base_value {
+        EvalValue::Missing => return Ok(EvalValue::Missing),
+        EvalValue::Value(value) => value,
+    };
+    if base_value.is_null() {
+        return Err(TransformError::new(
+            TransformErrorKind::ExprError,
+            "expr arg must not be null",
+        )
+        .with_path(base_path_arg));
+    }
+    let base_obj = match base_value {
+        JsonValue::Object(map) => map,
+        _ => {
+            return Err(TransformError::new(
+                TransformErrorKind::ExprError,
+                "expr arg must be object",
+            )
+            .with_path(base_path_arg))
+        }
+    };
+    base_value = JsonValue::Object(base_obj);
+
+    let paths = eval_json_paths_arg(args, injected, record, context, out, base_path, locals, 1, false)?;
+    let Some(paths) = paths else {
+        return Ok(EvalValue::Missing);
+    };
+
+    for tokens in paths {
+        remove_path(&mut base_value, &tokens);
+    }
+
+    Ok(EvalValue::Value(base_value))
+}
+
+fn eval_json_keys(
+    args: &[Expr],
+    injected: Option<&EvalValue>,
+    record: &JsonValue,
+    context: Option<&JsonValue>,
+    out: &JsonValue,
+    base_path: &str,
+    locals: Option<&EvalLocals<'_>>,
+) -> Result<EvalValue, TransformError> {
+    eval_json_object_unary(args, injected, record, context, out, base_path, locals, |map| {
+        Ok(JsonValue::Array(
+            map.keys().cloned().map(JsonValue::String).collect(),
+        ))
+    })
+}
+
+fn eval_json_values(
+    args: &[Expr],
+    injected: Option<&EvalValue>,
+    record: &JsonValue,
+    context: Option<&JsonValue>,
+    out: &JsonValue,
+    base_path: &str,
+    locals: Option<&EvalLocals<'_>>,
+) -> Result<EvalValue, TransformError> {
+    eval_json_object_unary(args, injected, record, context, out, base_path, locals, |map| {
+        Ok(JsonValue::Array(map.values().cloned().collect()))
+    })
+}
+
+fn eval_json_entries(
+    args: &[Expr],
+    injected: Option<&EvalValue>,
+    record: &JsonValue,
+    context: Option<&JsonValue>,
+    out: &JsonValue,
+    base_path: &str,
+    locals: Option<&EvalLocals<'_>>,
+) -> Result<EvalValue, TransformError> {
+    eval_json_object_unary(args, injected, record, context, out, base_path, locals, |map| {
+        let mut entries = Vec::with_capacity(map.len());
+        for (key, value) in map {
+            let mut entry = Map::new();
+            entry.insert("key".to_string(), JsonValue::String(key.clone()));
+            entry.insert("value".to_string(), value.clone());
+            entries.push(JsonValue::Object(entry));
+        }
+        Ok(JsonValue::Array(entries))
+    })
+}
+
+fn eval_json_object_flatten(
+    args: &[Expr],
+    injected: Option<&EvalValue>,
+    record: &JsonValue,
+    context: Option<&JsonValue>,
+    out: &JsonValue,
+    base_path: &str,
+    locals: Option<&EvalLocals<'_>>,
+) -> Result<EvalValue, TransformError> {
+    eval_json_object_unary(args, injected, record, context, out, base_path, locals, |map| {
+        let mut output = Map::new();
+        let mut tokens = Vec::new();
+        flatten_object(map, &mut tokens, &mut output, base_path)?;
+        Ok(JsonValue::Object(output))
+    })
+}
+
+fn eval_json_object_unflatten(
+    args: &[Expr],
+    injected: Option<&EvalValue>,
+    record: &JsonValue,
+    context: Option<&JsonValue>,
+    out: &JsonValue,
+    base_path: &str,
+    locals: Option<&EvalLocals<'_>>,
+) -> Result<EvalValue, TransformError> {
+    eval_json_object_unary(args, injected, record, context, out, base_path, locals, |map| {
+        let mut paths = Vec::with_capacity(map.len());
+        let mut values = Vec::with_capacity(map.len());
+        for (key, value) in map {
+            let tokens = parse_path_tokens(
+                key,
+                TransformErrorKind::ExprError,
+                format!("{}.args[0]", base_path),
+            )?;
+            if tokens.iter().any(|token| matches!(token, PathToken::Index(_))) {
+                return Err(TransformError::new(
+                    TransformErrorKind::ExprError,
+                    "array indexes are not allowed in path",
+                )
+                .with_path(format!("{}.args[0]", base_path)));
+            }
+            if has_path_conflict(&paths, &tokens) {
+                return Err(TransformError::new(
+                    TransformErrorKind::ExprError,
+                    "path conflicts with another path",
+                )
+                .with_path(format!("{}.args[0]", base_path)));
+            }
+            paths.push(tokens);
+            values.push(value.clone());
+        }
+
+        let mut root = JsonValue::Object(Map::new());
+        for (tokens, value) in paths.into_iter().zip(values) {
+            set_path_object_only(&mut root, &tokens, value, base_path)?;
+        }
+
+        Ok(root)
+    })
+}
+
+fn eval_json_object_unary<F>(
+    args: &[Expr],
+    injected: Option<&EvalValue>,
+    record: &JsonValue,
+    context: Option<&JsonValue>,
+    out: &JsonValue,
+    base_path: &str,
+    locals: Option<&EvalLocals<'_>>,
+    op: F,
+) -> Result<EvalValue, TransformError>
+where
+    F: FnOnce(&Map<String, JsonValue>) -> Result<JsonValue, TransformError>,
+{
+    let total_len = args_len(args, injected);
+    if total_len != 1 {
+        return Err(TransformError::new(
+            TransformErrorKind::ExprError,
+            "expr.args must contain exactly one item",
+        )
+        .with_path(format!("{}.args", base_path)));
+    }
+
+    let arg_path = format!("{}.args[0]", base_path);
+    let value =
+        eval_expr_at_index(0, args, injected, record, context, out, base_path, locals)?;
+    let value = match value {
+        EvalValue::Missing => return Ok(EvalValue::Missing),
+        EvalValue::Value(value) => value,
+    };
+    if value.is_null() {
+        return Err(TransformError::new(
+            TransformErrorKind::ExprError,
+            "expr arg must not be null",
+        )
+        .with_path(arg_path));
+    }
+    let map = match value {
+        JsonValue::Object(map) => map,
+        _ => {
+            return Err(TransformError::new(
+                TransformErrorKind::ExprError,
+                "expr arg must be object",
+            )
+            .with_path(arg_path))
+        }
+    };
+
+    op(&map).map(EvalValue::Value)
+}
+
+fn eval_json_paths_arg(
+    args: &[Expr],
+    injected: Option<&EvalValue>,
+    record: &JsonValue,
+    context: Option<&JsonValue>,
+    out: &JsonValue,
+    base_path: &str,
+    locals: Option<&EvalLocals<'_>>,
+    index: usize,
+    allow_terminal_index: bool,
+) -> Result<Option<Vec<Vec<PathToken>>>, TransformError> {
+    let arg_path = format!("{}.args[{}]", base_path, index);
+    let value =
+        eval_expr_at_index(index, args, injected, record, context, out, base_path, locals)?;
+    let value = match value {
+        EvalValue::Missing => return Ok(None),
+        EvalValue::Value(value) => value,
+    };
+    if value.is_null() {
+        return Err(TransformError::new(
+            TransformErrorKind::ExprError,
+            "expr arg must not be null",
+        )
+        .with_path(arg_path));
+    }
+    let items: Vec<(String, String)> = match value {
+        JsonValue::String(path) => vec![(arg_path.clone(), path)],
+        JsonValue::Array(items) => items
+            .iter()
+            .enumerate()
+            .map(|(path_index, item)| {
+                let item_path = format!("{}.args[{}][{}]", base_path, index, path_index);
+                let path = item.as_str().ok_or_else(|| {
+                    TransformError::new(
+                        TransformErrorKind::ExprError,
+                        "paths must be a string or array of strings",
+                    )
+                    .with_path(&item_path)
+                })?;
+                Ok::<(String, String), TransformError>((item_path, path.to_string()))
+            })
+            .collect::<Result<Vec<_>, TransformError>>()?,
+        _ => {
+            return Err(TransformError::new(
+                TransformErrorKind::ExprError,
+                "paths must be a string or array of strings",
+            )
+            .with_path(arg_path))
+        }
+    };
+
+    let mut paths = Vec::new();
+    for (item_path, path) in items {
+        let tokens = parse_path_tokens(&path, TransformErrorKind::ExprError, &item_path)?;
+        if !allow_terminal_index && matches!(tokens.last(), Some(PathToken::Index(_))) {
+            return Err(TransformError::new(
+                TransformErrorKind::ExprError,
+                "path must not end with array index",
+            )
+            .with_path(item_path));
+        }
+        if has_duplicate_path(&paths, &tokens) {
+            continue;
+        }
+        if has_path_conflict(&paths, &tokens) {
+            return Err(TransformError::new(
+                TransformErrorKind::ExprError,
+                "path conflicts with another path",
+            )
+            .with_path(item_path));
+        }
+        paths.push(tokens);
+    }
+
+    Ok(Some(paths))
+}
+
+fn has_duplicate_path(paths: &[Vec<PathToken>], tokens: &[PathToken]) -> bool {
+    paths.iter().any(|existing| existing == tokens)
+}
+
+fn has_path_conflict(paths: &[Vec<PathToken>], tokens: &[PathToken]) -> bool {
+    paths.iter().any(|existing| {
+        is_path_prefix(existing, tokens) || is_path_prefix(tokens, existing)
+    })
+}
+
+fn is_path_prefix(prefix: &[PathToken], tokens: &[PathToken]) -> bool {
+    if prefix.len() > tokens.len() {
+        return false;
+    }
+    prefix.iter().zip(tokens).all(|(left, right)| left == right)
+}
+
+fn merge_object(target: &mut Map<String, JsonValue>, incoming: &Map<String, JsonValue>, deep: bool) {
+    for (key, value) in incoming {
+        if deep {
+            if let (Some(JsonValue::Object(target_obj)), JsonValue::Object(incoming_obj)) =
+                (target.get_mut(key), value)
+            {
+                merge_object(target_obj, incoming_obj, true);
+                continue;
+            }
+        }
+        target.insert(key.clone(), value.clone());
+    }
+}
+
+fn flatten_object(
+    map: &Map<String, JsonValue>,
+    tokens: &mut Vec<PathToken>,
+    output: &mut Map<String, JsonValue>,
+    base_path: &str,
+) -> Result<(), TransformError> {
+    for (key, value) in map {
+        if key.is_empty() {
+            return Err(TransformError::new(
+                TransformErrorKind::ExprError,
+                "object_flatten does not support empty keys",
+            )
+            .with_path(format!("{}.args[0]", base_path)));
+        }
+        if key.contains('[') || key.contains(']') {
+            return Err(TransformError::new(
+                TransformErrorKind::ExprError,
+                "object_flatten does not support keys with '[' or ']'",
+            )
+            .with_path(format!("{}.args[0]", base_path)));
+        }
+        tokens.push(PathToken::Key(key.clone()));
+        match value {
+            JsonValue::Object(child) => {
+                if child.is_empty() {
+                    let path = format_path_tokens(tokens);
+                    output.insert(path, JsonValue::Object(Map::new()));
+                } else {
+                    flatten_object(child, tokens, output, base_path)?;
+                }
+            }
+            _ => {
+                let path = format_path_tokens(tokens);
+                output.insert(path, value.clone());
+            }
+        }
+        tokens.pop();
+    }
+    Ok(())
+}
+
+fn format_path_tokens(tokens: &[PathToken]) -> String {
+    let mut path = String::new();
+    for token in tokens {
+        match token {
+            PathToken::Key(key) => {
+                if needs_bracket_quote(key) {
+                    let escaped = key.replace('\\', "\\\\").replace('"', "\\\"");
+                    path.push('[');
+                    path.push('"');
+                    path.push_str(&escaped);
+                    path.push('"');
+                    path.push(']');
+                } else {
+                    if !path.is_empty() {
+                        path.push('.');
+                    }
+                    path.push_str(key);
+                }
+            }
+            PathToken::Index(index) => {
+                path.push('[');
+                path.push_str(&index.to_string());
+                path.push(']');
+            }
+        }
+    }
+    path
+}
+
+fn needs_bracket_quote(key: &str) -> bool {
+    key.contains('.')
+}
+
+fn set_path_object_only(
+    root: &mut JsonValue,
+    tokens: &[PathToken],
+    value: JsonValue,
+    base_path: &str,
+) -> Result<(), TransformError> {
+    if tokens.is_empty() {
+        return Err(TransformError::new(
+            TransformErrorKind::ExprError,
+            "path is empty",
+        )
+        .with_path(format!("{}.args[0]", base_path)));
+    }
+
+    let mut current = root;
+    for (index, token) in tokens.iter().enumerate() {
+        let key = match token {
+            PathToken::Key(key) => key,
+            PathToken::Index(_) => {
+                return Err(TransformError::new(
+                    TransformErrorKind::ExprError,
+                    "array indexes are not allowed in path",
+                )
+                .with_path(format!("{}.args[0]", base_path)))
+            }
+        };
+        let is_last = index == tokens.len() - 1;
+
+        match current {
+            JsonValue::Object(map) => {
+                if is_last {
+                    if map.contains_key(key) {
+                        return Err(TransformError::new(
+                            TransformErrorKind::ExprError,
+                            "path conflicts with existing value",
+                        )
+                        .with_path(format!("{}.args[0]", base_path)));
+                    }
+                    map.insert(key.clone(), value);
+                    return Ok(());
+                }
+
+                let entry = map.entry(key.clone()).or_insert_with(|| {
+                    JsonValue::Object(Map::new())
+                });
+                if !entry.is_object() {
+                    return Err(TransformError::new(
+                        TransformErrorKind::ExprError,
+                        "path conflicts with non-object value",
+                    )
+                    .with_path(format!("{}.args[0]", base_path)));
+                }
+                current = entry;
+            }
+            _ => {
+                return Err(TransformError::new(
+                    TransformErrorKind::ExprError,
+                    "path conflicts with non-object value",
+                )
+                .with_path(format!("{}.args[0]", base_path)))
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn set_path_with_indexes(
+    root: &mut JsonValue,
+    tokens: &[PathToken],
+    value: JsonValue,
+    base_path: &str,
+) -> Result<(), TransformError> {
+    if tokens.is_empty() {
+        return Err(TransformError::new(
+            TransformErrorKind::ExprError,
+            "path is empty",
+        )
+        .with_path(format!("{}.args[1]", base_path)));
+    }
+
+    let mut current = root;
+    for (index, token) in tokens.iter().enumerate() {
+        let is_last = index == tokens.len() - 1;
+        match token {
+            PathToken::Key(key) => {
+                let next_token = tokens.get(index + 1);
+                match current {
+                    JsonValue::Object(map) => {
+                        if is_last {
+                            map.insert(key.clone(), value);
+                            return Ok(());
+                        }
+                        let entry = map.entry(key.clone()).or_insert_with(|| {
+                            match next_token {
+                                Some(PathToken::Index(_)) => JsonValue::Array(Vec::new()),
+                                _ => JsonValue::Object(Map::new()),
+                            }
+                        });
+                        let expect_index = matches!(next_token, Some(PathToken::Index(_)));
+                        let entry_is_array = matches!(entry, JsonValue::Array(_));
+                        let entry_is_object = matches!(entry, JsonValue::Object(_));
+                        if !(expect_index && entry_is_array
+                            || !expect_index && entry_is_object)
+                        {
+                            return Err(TransformError::new(
+                                TransformErrorKind::ExprError,
+                                "path conflicts with non-object value",
+                            )
+                            .with_path(format!("{}.args[1]", base_path)));
+                        }
+                        current = entry;
+                    }
+                    _ => {
+                        return Err(TransformError::new(
+                            TransformErrorKind::ExprError,
+                            "path conflicts with non-object value",
+                        )
+                        .with_path(format!("{}.args[1]", base_path)))
+                    }
+                }
+            }
+            PathToken::Index(path_index) => {
+                let next_token = tokens.get(index + 1);
+                match current {
+                    JsonValue::Array(items) => {
+                        if items.len() <= *path_index {
+                            items.resize_with(path_index + 1, || JsonValue::Null);
+                        }
+                        if is_last {
+                            items[*path_index] = value;
+                            return Ok(());
+                        }
+                        let entry = &mut items[*path_index];
+                        if entry.is_null() {
+                            *entry = match next_token {
+                                Some(PathToken::Index(_)) => JsonValue::Array(Vec::new()),
+                                _ => JsonValue::Object(Map::new()),
+                            };
+                        }
+                        let expect_index = matches!(next_token, Some(PathToken::Index(_)));
+                        let entry_is_array = matches!(entry, JsonValue::Array(_));
+                        let entry_is_object = matches!(entry, JsonValue::Object(_));
+                        if !(expect_index && entry_is_array
+                            || !expect_index && entry_is_object)
+                        {
+                            return Err(TransformError::new(
+                                TransformErrorKind::ExprError,
+                                "path conflicts with non-object value",
+                            )
+                            .with_path(format!("{}.args[1]", base_path)));
+                        }
+                        current = entry;
+                    }
+                    _ => {
+                        return Err(TransformError::new(
+                            TransformErrorKind::ExprError,
+                            "path conflicts with non-object value",
+                        )
+                        .with_path(format!("{}.args[1]", base_path)))
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn remove_path(root: &mut JsonValue, tokens: &[PathToken]) {
+    if tokens.is_empty() {
+        return;
+    }
+
+    let (first, rest) = tokens.split_first().unwrap();
+    match first {
+        PathToken::Key(key) => {
+            if let JsonValue::Object(map) = root {
+                if rest.is_empty() {
+                    map.remove(key);
+                    return;
+                }
+                if let Some(next) = map.get_mut(key) {
+                    remove_path(next, rest);
+                }
+            }
+        }
+        PathToken::Index(index) => {
+            if let JsonValue::Array(items) = root {
+                if let Some(next) = items.get_mut(*index) {
+                    remove_path(next, rest);
+                }
+            }
+        }
+    }
 }
 
 fn eval_bool_and_or(

@@ -307,6 +307,16 @@ fn bool_expr_kind(expr: &Expr) -> BoolExprKind {
             | "pad_end"
             | "lookup"
             | "lookup_first"
+            | "merge"
+            | "deep_merge"
+            | "get"
+            | "pick"
+            | "omit"
+            | "keys"
+            | "values"
+            | "entries"
+            | "object_flatten"
+            | "object_unflatten"
             | "map"
             | "filter"
             | "flat_map"
@@ -390,6 +400,16 @@ fn bool_expr_kind_for_op_with_input(expr_op: &ExprOp, injected: BoolExprKind) ->
             | "pad_end"
             | "lookup"
             | "lookup_first"
+            | "merge"
+            | "deep_merge"
+            | "get"
+            | "pick"
+            | "omit"
+            | "keys"
+            | "values"
+            | "entries"
+            | "object_flatten"
+            | "object_unflatten"
             | "map"
             | "filter"
             | "flat_map"
@@ -538,6 +558,52 @@ fn validate_chain_op(
         }
         "lookup" | "lookup_first" => {
             validate_lookup_args_chain(expr_op, base_path, ctx);
+        }
+        "merge" | "deep_merge" => {
+            if args_len < 2 {
+                ctx.push(
+                    ErrorCode::InvalidArgs,
+                    "expr.args must contain at least two items",
+                    format!("{}.args", base_path),
+                );
+            }
+        }
+        "get" => {
+            if args_len != 2 {
+                ctx.push(
+                    ErrorCode::InvalidArgs,
+                    "expr.args must contain exactly two items",
+                    format!("{}.args", base_path),
+                );
+            } else {
+                validate_path_arg(&expr_op.args[0], &format!("{}.args[0]", base_path), ctx);
+            }
+        }
+        "pick" | "omit" => {
+            if args_len != 2 {
+                ctx.push(
+                    ErrorCode::InvalidArgs,
+                    "expr.args must contain exactly two items",
+                    format!("{}.args", base_path),
+                );
+            } else {
+                let allow_terminal_index = expr_op.op == "pick";
+                validate_path_array_arg(
+                    &expr_op.args[0],
+                    &format!("{}.args[0]", base_path),
+                    allow_terminal_index,
+                    ctx,
+                );
+            }
+        }
+        "keys" | "values" | "entries" | "object_flatten" | "object_unflatten" => {
+            if args_len != 1 {
+                ctx.push(
+                    ErrorCode::InvalidArgs,
+                    "expr.args must contain exactly one item",
+                    format!("{}.args", base_path),
+                );
+            }
         }
         "map"
         | "filter"
@@ -937,6 +1003,52 @@ fn validate_op(
         "lookup" | "lookup_first" => {
             validate_lookup_args(expr_op, base_path, ctx);
         }
+        "merge" | "deep_merge" => {
+            if expr_op.args.len() < 2 {
+                ctx.push(
+                    ErrorCode::InvalidArgs,
+                    "expr.args must contain at least two items",
+                    format!("{}.args", base_path),
+                );
+            }
+        }
+        "get" => {
+            if expr_op.args.len() != 2 {
+                ctx.push(
+                    ErrorCode::InvalidArgs,
+                    "expr.args must contain exactly two items",
+                    format!("{}.args", base_path),
+                );
+            } else {
+                validate_path_arg(&expr_op.args[1], &format!("{}.args[1]", base_path), ctx);
+            }
+        }
+        "pick" | "omit" => {
+            if expr_op.args.len() != 2 {
+                ctx.push(
+                    ErrorCode::InvalidArgs,
+                    "expr.args must contain exactly two items",
+                    format!("{}.args", base_path),
+                );
+            } else {
+                let allow_terminal_index = expr_op.op == "pick";
+                validate_path_array_arg(
+                    &expr_op.args[1],
+                    &format!("{}.args[1]", base_path),
+                    allow_terminal_index,
+                    ctx,
+                );
+            }
+        }
+        "keys" | "values" | "entries" | "object_flatten" | "object_unflatten" => {
+            if expr_op.args.len() != 1 {
+                ctx.push(
+                    ErrorCode::InvalidArgs,
+                    "expr.args must contain exactly one item",
+                    format!("{}.args", base_path),
+                );
+            }
+        }
         "map"
         | "filter"
         | "flat_map"
@@ -1171,6 +1283,16 @@ fn is_valid_op(value: &str) -> bool {
             | "pad_end"
             | "lookup"
             | "lookup_first"
+            | "merge"
+            | "deep_merge"
+            | "get"
+            | "pick"
+            | "omit"
+            | "keys"
+            | "values"
+            | "entries"
+            | "object_flatten"
+            | "object_unflatten"
             | "map"
             | "filter"
             | "flat_map"
@@ -1261,6 +1383,129 @@ fn validate_lookup_args(expr_op: &ExprOp, base_path: &str, ctx: &mut ValidationC
             );
         }
     }
+}
+
+fn validate_path_array_arg(
+    expr: &Expr,
+    base_path: &str,
+    allow_terminal_index: bool,
+    ctx: &mut ValidationCtx<'_>,
+) {
+    let value = match expr {
+        Expr::Literal(value) => value,
+        _ => return,
+    };
+
+    let mut items: Vec<(String, String)> = Vec::new();
+    if let Some(path) = value.as_str() {
+        items.push((base_path.to_string(), path.to_string()));
+    } else if let Some(array) = value.as_array() {
+        for (index, item) in array.iter().enumerate() {
+            let item_path = format!("{}[{}]", base_path, index);
+            let path = match item.as_str() {
+                Some(path) => path,
+                None => {
+                    ctx.push(
+                        ErrorCode::InvalidArgs,
+                        "paths must be a string or array of strings",
+                        item_path,
+                    );
+                    continue;
+                }
+            };
+            items.push((item_path, path.to_string()));
+        }
+    } else {
+        ctx.push(
+            ErrorCode::InvalidArgs,
+            "paths must be a string or array of strings",
+            base_path,
+        );
+        return;
+    }
+
+    let mut paths: Vec<Vec<PathToken>> = Vec::new();
+    for (item_path, path) in items {
+
+        let tokens = match parse_path(&path) {
+            Ok(tokens) => tokens,
+            Err(_) => {
+                ctx.push(
+                    ErrorCode::InvalidArgs,
+                    "paths must be valid path strings",
+                    item_path,
+                );
+                continue;
+            }
+        };
+
+        if !allow_terminal_index && matches!(tokens.last(), Some(PathToken::Index(_))) {
+            ctx.push(
+                ErrorCode::InvalidArgs,
+                "path must not end with array index",
+                item_path,
+            );
+            continue;
+        }
+
+        if paths.iter().any(|existing| existing == &tokens) {
+            continue;
+        }
+        if has_path_conflict(&paths, &tokens) {
+            ctx.push(
+                ErrorCode::InvalidArgs,
+                "path conflicts with another path",
+                item_path,
+            );
+            continue;
+        }
+        paths.push(tokens);
+    }
+}
+
+fn validate_path_arg(expr: &Expr, base_path: &str, ctx: &mut ValidationCtx<'_>) {
+    let value = match expr {
+        Expr::Literal(value) => value,
+        _ => return,
+    };
+
+    let path = match value.as_str() {
+        Some(path) => path,
+        None => {
+            ctx.push(ErrorCode::InvalidArgs, "path must be a string", base_path);
+            return;
+        }
+    };
+
+    if path.is_empty() {
+        ctx.push(
+            ErrorCode::InvalidArgs,
+            "path must be a non-empty string",
+            base_path,
+        );
+        return;
+    }
+
+    if parse_path(path).is_err() {
+        ctx.push(
+            ErrorCode::InvalidArgs,
+            "path must be a valid path string",
+            base_path,
+        );
+    }
+}
+
+fn has_path_conflict(paths: &[Vec<PathToken>], tokens: &[PathToken]) -> bool {
+    paths.iter().any(|existing| {
+        is_path_prefix(existing, tokens) || is_path_prefix(tokens, existing)
+    })
+}
+
+fn is_path_prefix(prefix: &[PathToken], tokens: &[PathToken]) -> bool {
+    if prefix.len() > tokens.len() {
+        return false;
+    }
+    prefix.iter().zip(tokens).all(|(left, right)| left == right)
 }
 
 fn literal_string(expr: &Expr) -> Option<&str> {

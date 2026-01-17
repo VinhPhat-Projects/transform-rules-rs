@@ -192,6 +192,23 @@ expr:
 
 ## Operations (v1)
 
+### Operation categories
+
+- String ops: `concat`, `to_string`, `trim`, `lowercase`, `uppercase`, `replace`, `split`, `pad_start`, `pad_end`
+- JSON ops: `merge`, `deep_merge`, `get`, `pick`, `omit`, `keys`, `values`, `entries`, `object_flatten`, `object_unflatten`
+- Array ops: `map`, `filter`, `flat_map`, `flatten`, `take`, `drop`, `slice`, `chunk`, `zip`, `zip_with`, `unzip`, `group_by`, `key_by`, `partition`, `unique`, `distinct_by`, `sort_by`, `find`, `find_index`, `index_of`, `contains`, `sum`, `avg`, `min`, `max`, `reduce`, `fold`
+- Numeric ops: `+`, `-`, `*`, `/`, `round`, `to_base`, `sum`, `avg`, `min`, `max`
+- Date ops: `date_format`, `to_unixtime`
+- Logical ops: `and`, `or`, `not`
+- Comparison ops: `==`, `!=`, `<`, `<=`, `>`, `>=`, `~=`
+- Type casts: `string`, `int`, `float`, `bool`
+
+### Naming conventions
+
+- `to_*`: conversions (e.g., `to_string`, `to_base`, `to_unixtime`)
+- `*_by`: key-based variants (`group_by`, `key_by`, `distinct_by`, `sort_by`)
+- `object_*`: object-specific structural ops (`object_flatten`, `object_unflatten`)
+
 | op | args | description | usage/example |
 | --- | --- | --- | --- |
 | `concat` | `>=1 expr` | Concatenate all args as strings. Missing propagates; `null` is an error. | `op: "concat"`<br>`args: [ { ref: "input.first" }, " ", { ref: "input.last" } ]`<br>`{"first":"Ada","last":"Lovelace"} -> "Ada Lovelace"` |
@@ -224,6 +241,21 @@ expr:
 | `>` | `2 expr` | Numeric comparison. | `args: [ { ref: "input.score" }, 90 ]`<br>`{"score": 95} -> true` |
 | `>=` | `2 expr` | Numeric comparison. | `args: [ { ref: "input.score" }, 90 ]`<br>`{"score": 90} -> true` |
 | `~=` | `2 expr` | Regex match (left value against right pattern). | `args: [ { ref: "input.email" }, ".+@example\\.com$" ]`<br>`{"email":"a@example.com"} -> true` |
+
+## JSON Operations (v1)
+
+| op | args | description |
+| --- | --- | --- |
+| `merge` | `obj1, obj2, ...` | Shallow merge (rightmost wins). |
+| `deep_merge` | `obj1, obj2, ...` | Recursive merge for objects; arrays are replaced. |
+| `get` | `obj_or_array, path` | Get value at path; missing if path is absent. |
+| `pick` | `obj, paths` | Keep only selected paths (`paths` is string or array). |
+| `omit` | `obj, paths` | Remove selected paths (`paths` is string or array). |
+| `keys` | `obj` | Array of keys. |
+| `values` | `obj` | Array of values. |
+| `entries` | `obj` | Array of `{key, value}` entries. |
+| `object_flatten` | `obj` | Flatten object keys into path strings. |
+| `object_unflatten` | `obj` | Expand path keys into nested objects. |
 
 ## Array Operations (v1)
 
@@ -308,6 +340,20 @@ expr:
 - `~=`:
   - both operands must be strings.
   - invalid regex pattern is an error (Rust regex syntax).
+- JSON ops:
+  - `get`: base `missing`/`null` or absent path returns `missing`.
+  - `get`: path must be a valid non-empty path string.
+  - Object ops (`merge`/`deep_merge`/`pick`/`omit`/`keys`/`values`/`entries`/`object_*`):
+    - `null` is an error; base must be an object.
+  - `merge`/`deep_merge`: missing args are skipped; all missing -> `missing`.
+  - `deep_merge`: objects merge recursively; arrays and scalars are replaced.
+  - `pick`/`omit`: `paths` is a string or array of strings (path syntax).
+  - `pick`/`omit`: conflicting paths (e.g. `a` and `a.b`) are errors.
+  - `omit`: terminal array index in path is an error; traversal indexes are allowed.
+  - `object_flatten`: arrays are preserved as values (not flattened).
+  - `object_flatten`: keys containing `[` or `]` are errors.
+  - `object_flatten`: empty keys are errors.
+  - `object_unflatten`: array indexes in paths are errors.
 - Array ops:
   - Array args `missing`/`null` are treated as empty arrays.
   - `map`/`flat_map`: element expr `missing` becomes `null`.

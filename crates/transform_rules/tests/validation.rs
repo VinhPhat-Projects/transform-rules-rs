@@ -76,6 +76,16 @@ fn valid_rules_should_pass_validation() {
         "t14_expr_chain",
         "t15_record_when",
         "t16_array_ops",
+        "t17_json_ops_merge",
+        "t18_json_ops_deep_merge",
+        "t19_json_ops_pick",
+        "t20_json_ops_omit",
+        "t21_json_ops_keys_values_entries",
+        "t22_json_ops_object_flatten",
+        "t23_json_ops_object_unflatten",
+        "t24_json_ops_missing",
+        "t25_json_ops_get_chain",
+        "t26_chain_all_ops",
     ];
 
     for case in cases {

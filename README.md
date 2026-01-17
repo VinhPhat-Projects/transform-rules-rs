@@ -27,7 +27,20 @@ A small Rust library and CLI to transform CSV/JSON data using YAML rules.
 
 ## Installation
 
-Prerequisites: a Rust toolchain (via rustup).
+### Homebrew (recommended)
+```
+brew install vinhphatfsg/tap/transform-rules
+transform-rules --help
+```
+This installs both `transform-rules` and `transform-rules-mcp`.
+
+### Quick usage (CLI)
+```
+transform-rules validate --rules rules.yaml
+transform-rules transform --rules rules.yaml --input input.json
+```
+
+Prerequisites for source builds: a Rust toolchain (via rustup).
 
 ### Download prebuilt binaries (GitHub Releases)
 1) Open the release page and download the asset for your OS/arch:
@@ -85,6 +98,10 @@ cargo build -p transform_rules_mcp --release
 
 mcp add example:
 ```bash
+# from brew
+claude mcp add --transport stdio --scope local transform-rules -- transform-rules-mcp
+codex mcp add transform-rules -- transform-rules-mcp
+
 # from download releases
 claude mcp add --transport stdio --scope local transform-rules -- `pwd`/transform-rules-mcp
 codex mcp add transform-rules -- `pwd`/transform-rules-mcp
@@ -143,7 +160,12 @@ mappings:
         - "-"
         - { ref: "out.price" }
   - target: "tenant"
-    source: "context.tenant_id"
+    expr:
+      chain:
+        - { ref: "context.tenant_master" }
+        - { op: "find", args: [ { op: "==", args: [ { ref: "item.value.id" }, { ref: "out.id" } ] } ] }
+        - { op: "get", args: [ "tenant_id" ] }
+        - { op: "replace", args: [ "-", "_" , "all" ] }
 ```
 
 `input.json`
@@ -153,7 +175,12 @@ mappings:
 
 `context.json`
 ```json
-{ "tenant_id": "t-001" }
+{ "tenant_master": [{"id": 1, "tenant_id": "t-001" }]}
+```
+
+`output.json`
+```json
+{ "id": 1, "price": 10, "text": "1-10", "tenant": "t_001" }
 ```
 
 ### 2) Validate rules
